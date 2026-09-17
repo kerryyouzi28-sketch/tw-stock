@@ -1,6 +1,6 @@
 import json
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 import streamlit as st
 
@@ -13,17 +13,26 @@ st.caption("支援單股診斷、號碼區間掃描、即時預估成交量與�
 
 
 def estimate_daily_volume(volume_so_far):
-    now = datetime.now()
-    market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
-    market_close = now.replace(hour=13, minute=30, second=0, microsecond=0)
+    """根據台灣時間 (UTC+8) 盤中進度 (09:00 - 13:30 共 270 分鐘) 推算預估成交量"""
+    tw_tz = timezone(timedelta(hours=8))
+    now_tw = datetime.now(tw_tz)
 
-    if now < market_open or now >= market_close:
+    market_open = now_tw.replace(hour=9, minute=0, second=0, microsecond=0)
+    market_close = now_tw.replace(hour=13, minute=30, second=0, microsecond=0)
+
+    # 非盤中時間（開盤前或收盤後），預估量即等於當日總成交量
+    if now_tw < market_open or now_tw >= market_close:
         return volume_so_far
-    else:
-        elapsed_minutes = (now - market_open).total_seconds() / 60.0
-        if elapsed_minutes < 5:
-            return volume_so_far
-        return int(volume_so_far * (270.0 / elapsed_minutes))
+
+    # 盤中時間：計算自 09:00 起經過的總分鐘數
+    elapsed_minutes = (now_tw - market_open).total_seconds() / 60.0
+
+    # 開盤前 5 分鐘數據波動大，先不大幅放大推算
+    if elapsed_minutes < 5:
+        return volume_so_far
+
+    # 依交易時間比例推算全天預估量
+    return int(volume_so_far * (270.0 / elapsed_minutes))
 
 
 def fetch_yahoo_detail(symbol):
@@ -80,6 +89,7 @@ def evaluate_stock_full(
     vol_shares = int(volumes[-1] / 1000)
     est_vol_shares = estimate_daily_volume(vol_shares)
 
+    # 批次過濾：單股模式 (ignore_filters=True) 完全不受門檻限制
     if not ignore_filters:
         if (
             latest_price < 5.0
